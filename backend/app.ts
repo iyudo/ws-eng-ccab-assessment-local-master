@@ -33,6 +33,9 @@ async function reset(account: string): Promise<void> {
 async function charge(account: string, charges: number): Promise<ChargeResult> {
     const client = await connect();
     try {
+        if (charges < 0) {
+            throw new Error("Charges must be positive");
+        }
         const results = await client.evalSha(CHARGE_WITH_AMOUNT_EVAL_SHA, {
             keys: [`${account}/operationStatus`, `${account}/balance`],
             arguments: [charges.toString()]
