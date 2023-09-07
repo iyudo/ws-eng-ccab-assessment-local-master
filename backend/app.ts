@@ -3,7 +3,7 @@ import { createClient } from "redis";
 import { json } from "body-parser";
 
 const DEFAULT_BALANCE = 100;
-const CHARGE_WITH_AMOUNT_SCRIPT = 'if tonumber(redis.call("get",KEYS[2])) >= tonumber(ARGV[1]) then redis.call("set", KEYS[1], 1) redis.call("decrby", KEYS[2] , tonumber(ARGV[1])) else redis.call("set", KEYS[1], -1) end return redis.call("mget", KEYS[1], KEYS[2])';
+const CHARGE_WITH_AMOUNT_SCRIPT = 'if tonumber(redis.call("get",KEYS[1])) >= tonumber(ARGV[1]) then redis.call("decrby", KEYS[1] , tonumber(ARGV[1])) redis.call("set", KEYS[2], 1) else redis.call("set", KEYS[2], -1) end return redis.call("mget", KEYS[1], KEYS[2])';
 let CHARGE_WITH_AMOUNT_EVAL_SHA: string;
 
 interface ChargeResult {
@@ -37,11 +37,11 @@ async function charge(account: string, charges: number): Promise<ChargeResult> {
             throw new Error("Charges must be positive");
         }
         const results = await client.evalSha(CHARGE_WITH_AMOUNT_EVAL_SHA, {
-            keys: [`${account}/operationStatus`, `${account}/balance`],
+            keys: [`${account}/balance`, `${account}/operationStatus`],
             arguments: [charges.toString()]
         }) as string[];
-        let operationStatus = Number(results[0]);
-        let remainingBalance = Number(results[1]);
+        let remainingBalance = Number(results[0]);
+        let operationStatus = Number(results[1]);
         if (operationStatus > 0) {
             return { isAuthorized: true, remainingBalance: remainingBalance, charges: charges };
         } else if (operationStatus < 0) {
