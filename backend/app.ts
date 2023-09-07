@@ -3,6 +3,11 @@ import { createClient } from "redis";
 import { json } from "body-parser";
 
 const DEFAULT_BALANCE = 100;
+const DEFAULT_CHARGE_OPERATION_STATUS = 0;
+const SUCCESS_CHARGE_OPERATION_STATUS = -1;
+const FAIL_CHARGE_OPERATION_STATUS = 1;
+const CHARGE_WITH_AMOUNT_SCRIPT = 'if tonumber(redis.call("get",KEYS[1])) >= tonumber(ARGV[1]) then redis.call("decrby", KEYS[1] , tonumber(ARGV[1])) redis.call("set", KEYS[2], 1) else redis.call("set", KEYS[2], -1) end return redis.call("mget", KEYS[1], KEYS[2])';
+let CHARGE_WITH_AMOUNT_EVAL_SHA: string;
 
 interface ChargeResult {
     isAuthorized: boolean;
@@ -15,6 +20,7 @@ export async function connect(): Promise<ReturnType<typeof createClient>> {
     console.log(`Using redis URL ${url}`);
     const client = createClient({ url });
     await client.connect();
+    CHARGE_WITH_AMOUNT_EVAL_SHA = await client.scriptLoad(CHARGE_WITH_AMOUNT_SCRIPT);
     return client;
 }
 
@@ -22,6 +28,7 @@ async function reset(account: string): Promise<void> {
     const client = await connect();
     try {
         await client.set(`${account}/balance`, DEFAULT_BALANCE);
+        await client.set(`${account}/operation-status`, DEFAULT_CHARGE_OPERATION_STATUS);
     } finally {
         await client.disconnect();
     }
@@ -30,13 +37,21 @@ async function reset(account: string): Promise<void> {
 async function charge(account: string, charges: number): Promise<ChargeResult> {
     const client = await connect();
     try {
-        const balance = parseInt((await client.get(`${account}/balance`)) ?? "");
-        if (balance >= charges) {
-            await client.set(`${account}/balance`, balance - charges);
-            const remainingBalance = parseInt((await client.get(`${account}/balance`)) ?? "");
-            return { isAuthorized: true, remainingBalance, charges };
+        if (charges < 0) {
+            throw new Error("Charges must be positive");
+        }
+        const results = await client.evalSha(CHARGE_WITH_AMOUNT_EVAL_SHA, {
+            keys: [`${account}/balance`, `${account}/operation-status`],
+            arguments: [charges.toString()]
+        }) as string[];
+        let remainingBalance = Number(results[0]);
+        let operationStatus = Number(results[1]);
+        if (operationStatus == SUCCESS_CHARGE_OPERATION_STATUS) {
+            return { isAuthorized: true, remainingBalance: remainingBalance, charges: charges };
+        } else if (operationStatus == FAIL_CHARGE_OPERATION_STATUS) {
+            return { isAuthorized: false, remainingBalance: remainingBalance, charges: 0 };
         } else {
-            return { isAuthorized: false, remainingBalance: balance, charges: 0 };
+            throw new Error("Something went wrong");
         }
     } finally {
         await client.disconnect();
